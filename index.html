@@ -559,8 +559,9 @@
 
                 this.stun = 0;
                 this.floatT = Math.random() * 10;
-                this.walkCycle = 0; 
+                this.walkCycle = 0;
                 this.target = { x: this.x, y: this.y };
+                this.lastJumpInput = false; // For detecting jump key press (rising edge)
             }
 
             respawn() {
@@ -580,7 +581,7 @@
 
             update(plats, allPlayers, input) {
                 this.floatT += 0.1;
-                this.walkCycle += Math.abs(this.vx) * 0.12; 
+                this.walkCycle += Math.abs(this.vx) * 0.12;
 
                 if(this.skillCooldown > 0) this.skillCooldown--;
 
@@ -594,7 +595,13 @@
                 const spd = MOVE_SPEED * this.stats.speed;
                 if (input.left) { this.vx -= spd; this.facingRight = false; }
                 if (input.right) { this.vx += spd; this.facingRight = true; }
-                
+
+                // Handle jump from network input (detects rising edge)
+                if (input.up && !this.lastJumpInput) {
+                    this.jump();
+                }
+                this.lastJumpInput = input.up;
+
                 if (input.attack && !this.isAttacking) {
                     this.isAttacking = true;
                     this.attackTimer = this.attackTotal;
@@ -1179,8 +1186,7 @@
             if(isDown && k === 'escape') { togglePause(); return; }
 
             if (['w','arrowup'].includes(k)) {
-                if (isDown && players[myId] && !isPaused) { if(isHost) players[myId].jump(); else if(localKeys.up === false) localKeys.up = true; }
-                if (!isDown) localKeys.up = false;
+                localKeys.up = isDown;
             }
             if (['s','arrowdown'].includes(k)) localKeys.down = isDown;
             if (['a','arrowleft'].includes(k)) localKeys.left = isDown;
@@ -1189,8 +1195,8 @@
             if (['f'].includes(k)) localKeys.skill = isDown;
 
             if (!isOnline && isHost) {
-                if (!inputs[1]) inputs[1] = { up:false, down:false, left:false, right:false, attack:false };
-                if (k === 'arrowup') { if(isDown && players[1]) players[1].jump(); }
+                if (!inputs[1]) inputs[1] = { up:false, down:false, left:false, right:false, attack:false, skill:false };
+                if (k === 'arrowup') inputs[1].up = isDown;
                 if (k === 'arrowdown') inputs[1].down = isDown;
                 if (k === 'arrowleft') inputs[1].left = isDown;
                 if (k === 'arrowright') inputs[1].right = isDown;
