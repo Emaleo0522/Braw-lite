@@ -263,27 +263,31 @@
         const ICE_SERVERS = {
             config: {
                 iceServers: [
+                    // Google STUN servers (free, reliable)
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
                     { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun.relay.metered.ca:80' },
+                    { urls: 'stun:stun3.l.google.com:19302' },
+                    { urls: 'stun:stun4.l.google.com:19302' },
+                    // OpenRelay TURN servers (free, open source)
                     {
-                        urls: 'turn:global.relay.metered.ca:80',
-                        username: 'e8dd65b92f6932a5c648c661',
-                        credential: 'xJv1lk2Mxoz0ADWX'
+                        urls: 'turn:openrelay.metered.ca:80',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
                     },
                     {
-                        urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-                        username: 'e8dd65b92f6932a5c648c661',
-                        credential: 'xJv1lk2Mxoz0ADWX'
+                        urls: 'turn:openrelay.metered.ca:443',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
                     },
                     {
-                        urls: 'turn:global.relay.metered.ca:443',
-                        username: 'e8dd65b92f6932a5c648c661',
-                        credential: 'xJv1lk2Mxoz0ADWX'
+                        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                        username: 'openrelayproject',
+                        credential: 'openrelayproject'
                     }
                 ]
-            }
+            },
+            debug: 2 // Show connection debug info in console
         };
         
         let lobbyState = {
@@ -925,22 +929,26 @@
 
             peer = new Peer(ICE_SERVERS);
             peer.on('open', id => {
-                hostConn = peer.connect(hostId, ICE_SERVERS);
+                hostConn = peer.connect(hostId, { reliable: true });
 
-                // Timeout for connection attempt
+                // Timeout for connection attempt (30 seconds for TURN relay connections)
                 const connectionTimeout = setTimeout(() => {
                     if (!hostConn.open) {
                         document.getElementById('btn-join').innerText = 'UNIRSE';
                         document.getElementById('btn-join').disabled = false;
-                        alert('No se pudo conectar. Verifica el ID de la sala o intenta de nuevo.');
+                        alert('No se pudo conectar después de 30 segundos.\n\nPosibles causas:\n- ID de sala incorrecto\n- El host cerró la sala\n- Firewall bloqueando conexión\n\nIntenta de nuevo o pide al host que reinicie la sala.');
                     }
-                }, 15000);
+                }, 30000);
+
+                // Show connection progress
+                document.getElementById('btn-join').innerText = 'BUSCANDO HOST...';
 
                 hostConn.on('open', () => {
                     clearTimeout(connectionTimeout);
                     document.getElementById('mode-menu').classList.add('hidden');
                     showLobbyUI();
                     document.getElementById('lobby-msg').innerText = '✓ Conectado al host';
+                    console.log('Connection established successfully!');
                 });
                 hostConn.on('data', data => handleClientData(data));
                 hostConn.on('error', err => {
@@ -949,6 +957,21 @@
                     document.getElementById('btn-join').innerText = 'UNIRSE';
                     document.getElementById('btn-join').disabled = false;
                     alert('Error de conexión: ' + err.type);
+                });
+
+                // Monitor ICE connection state
+                hostConn.on('iceStateChanged', state => {
+                    console.log('ICE state:', state);
+                    if (state === 'checking') {
+                        document.getElementById('btn-join').innerText = 'CONECTANDO...';
+                    } else if (state === 'connected' || state === 'completed') {
+                        document.getElementById('btn-join').innerText = 'ESTABLECIENDO...';
+                    } else if (state === 'failed') {
+                        clearTimeout(connectionTimeout);
+                        document.getElementById('btn-join').innerText = 'UNIRSE';
+                        document.getElementById('btn-join').disabled = false;
+                        alert('Conexión fallida. Tu red puede estar bloqueando WebRTC.');
+                    }
                 });
                 hostConn.on('close', () => {
                     if (gameRunning) {
