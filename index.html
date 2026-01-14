@@ -253,11 +253,38 @@
         let animationId;
         
         let peer = null;
-        let connections = {}; 
-        let hostConn = null;  
-        let myId = null;      
+        let connections = {};
+        let hostConn = null;
+        let myId = null;
         let isHost = false;
         let isOnline = false;
+
+        // ICE servers configuration for NAT traversal (connecting across different networks)
+        const ICE_SERVERS = {
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' },
+                    { urls: 'stun:stun.relay.metered.ca:80' },
+                    {
+                        urls: 'turn:global.relay.metered.ca:80',
+                        username: 'e8dd65b92f6932a5c648c661',
+                        credential: 'xJv1lk2Mxoz0ADWX'
+                    },
+                    {
+                        urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+                        username: 'e8dd65b92f6932a5c648c661',
+                        credential: 'xJv1lk2Mxoz0ADWX'
+                    },
+                    {
+                        urls: 'turn:global.relay.metered.ca:443',
+                        username: 'e8dd65b92f6932a5c648c661',
+                        credential: 'xJv1lk2Mxoz0ADWX'
+                    }
+                ]
+            }
+        };
         
         let lobbyState = {
             players: [
@@ -269,7 +296,12 @@
         };
 
         let localKeys = { up: false, down: false, left: false, right: false, attack: false, skill: false };
-        let inputs = [{}, {}, {}, {}]; 
+        let inputs = [{}, {}, {}, {}];
+
+        // Timing control for consistent physics
+        let lastTime = 0;
+        let networkSendTimer = 0;
+        const NETWORK_SEND_INTERVAL = 50; // Send network updates every 50ms instead of every frame 
 
         // --- SOUND MANAGER ---
         const SoundManager = {
@@ -635,10 +667,20 @@
             }
 
             interpolate() {
-                this.x += (this.target.x - this.x) * 0.4;
-                this.y += (this.target.y - this.y) * 0.4;
+                // Smoother interpolation with clamped speed to prevent jittering
+                const lerpFactor = 0.2; // Slower interpolation for smoother movement
+                const dx = this.target.x - this.x;
+                const dy = this.target.y - this.y;
+
+                // Only interpolate if difference is significant
+                if (Math.abs(dx) > 0.5) this.x += dx * lerpFactor;
+                else this.x = this.target.x;
+
+                if (Math.abs(dy) > 0.5) this.y += dy * lerpFactor;
+                else this.y = this.target.y;
+
                 this.floatT += 0.1;
-                this.walkCycle += Math.abs(this.x - this.target.x) * 0.15; 
+                this.walkCycle += Math.abs(dx) * 0.08;
             }
 
             dealDamage(enemy) {
@@ -821,8 +863,13 @@
         function togglePause() {
             if(!gameRunning) return;
             isPaused = !isPaused;
-            if(isPaused) document.getElementById('pause-menu').classList.remove('hidden');
-            else { document.getElementById('pause-menu').classList.add('hidden'); animate(); }
+            if(isPaused) {
+                document.getElementById('pause-menu').classList.remove('hidden');
+            } else {
+                document.getElementById('pause-menu').classList.add('hidden');
+                // Reset timing to prevent huge delta after unpause
+                lastTime = performance.now();
+            }
         }
         function returnToLobby() {
             isPaused = false; gameRunning = false;
@@ -844,23 +891,70 @@
         function setupOnline() {
             SoundManager.startMusic(); // Start Music
             isOnline = true; document.getElementById('mode-menu').classList.add('hidden'); showLobbyUI();
-            peer = new Peer();
+            document.getElementById('lobby-msg').innerText = 'Conectando al servidor...';
+            peer = new Peer(ICE_SERVERS);
             peer.on('open', id => {
                 document.getElementById('lobby-id').value = id;
+                document.getElementById('lobby-msg').innerText = 'Sala creada. Comparte el ID con tus amigos.';
                 isHost = true; myId = 0; updateLobbyUI();
                 document.getElementById('sel-0').disabled = false; document.getElementById('btn-start').classList.remove('hidden');
                 peer.on('connection', conn => handleConnection(conn));
             });
+            peer.on('error', err => {
+                console.error('PeerJS Error:', err);
+                document.getElementById('lobby-msg').innerText = '❌ Error de conexión: ' + err.type;
+            });
         }
         function joinLobby() {
             SoundManager.startMusic(); // Start Music
-            const hostId = document.getElementById('join-input').value; if(!hostId) return;
+            const hostId = document.getElementById('join-input').value;
+            if(!hostId) {
+                alert('Por favor ingresa el ID de la sala');
+                return;
+            }
             isOnline = true; isHost = false;
-            peer = new Peer();
+            document.getElementById('btn-join').innerText = 'CONECTANDO...';
+            document.getElementById('btn-join').disabled = true;
+
+            peer = new Peer(ICE_SERVERS);
             peer.on('open', id => {
-                hostConn = peer.connect(hostId);
-                hostConn.on('open', () => { document.getElementById('mode-menu').classList.add('hidden'); showLobbyUI(); });
+                hostConn = peer.connect(hostId, ICE_SERVERS);
+
+                // Timeout for connection attempt
+                const connectionTimeout = setTimeout(() => {
+                    if (!hostConn.open) {
+                        document.getElementById('btn-join').innerText = 'UNIRSE';
+                        document.getElementById('btn-join').disabled = false;
+                        alert('No se pudo conectar. Verifica el ID de la sala o intenta de nuevo.');
+                    }
+                }, 15000);
+
+                hostConn.on('open', () => {
+                    clearTimeout(connectionTimeout);
+                    document.getElementById('mode-menu').classList.add('hidden');
+                    showLobbyUI();
+                    document.getElementById('lobby-msg').innerText = '✓ Conectado al host';
+                });
                 hostConn.on('data', data => handleClientData(data));
+                hostConn.on('error', err => {
+                    clearTimeout(connectionTimeout);
+                    console.error('Connection error:', err);
+                    document.getElementById('btn-join').innerText = 'UNIRSE';
+                    document.getElementById('btn-join').disabled = false;
+                    alert('Error de conexión: ' + err.type);
+                });
+                hostConn.on('close', () => {
+                    if (gameRunning) {
+                        alert('Conexión perdida con el host');
+                        location.reload();
+                    }
+                });
+            });
+            peer.on('error', err => {
+                console.error('PeerJS Error:', err);
+                document.getElementById('btn-join').innerText = 'UNIRSE';
+                document.getElementById('btn-join').disabled = false;
+                alert('Error: ' + err.type + '. Intenta de nuevo.');
             });
         }
         function showLobbyUI() {
@@ -890,13 +984,25 @@
             if (data.type === 'start') { startGameClient(data.config); }
             if (data.type === 'gameState') {
                 data.players.forEach((pState, i) => {
-                    if (players[i]) {
-                        players[i].target.x = pState.x; players[i].target.y = pState.y; players[i].vx = pState.vx; players[i].vy = pState.vy;
-                        players[i].kills = pState.kills; players[i].facingRight = pState.dir; if(pState.att) players[i].isAttacking = true;
-                        // Projectiles sync could be added here but keeping simple
+                    if (players[i] && pState) {
+                        // Set target for interpolation - don't directly set position
+                        players[i].target.x = pState.x;
+                        players[i].target.y = pState.y;
+                        // Only update velocity if significantly different to prevent jitter
+                        if (Math.abs(players[i].vx - pState.vx) > 0.5) players[i].vx = pState.vx;
+                        if (Math.abs(players[i].vy - pState.vy) > 0.5) players[i].vy = pState.vy;
+                        players[i].kills = pState.kills;
+                        players[i].facingRight = pState.dir;
+                        if (pState.att && !players[i].isAttacking) {
+                            players[i].isAttacking = true;
+                            players[i].attackTimer = players[i].attackTotal;
+                        }
                     }
                 });
-                projectiles = data.projectiles.map(p => new Projectile(p.x, p.y, p.vx, p.vy, p.ownerId, p.type)); // Sync projectiles roughly
+                // Only update projectiles if count changed significantly to prevent flicker
+                if (Math.abs(projectiles.length - data.projectiles.length) > 0 || projectiles.length === 0) {
+                    projectiles = data.projectiles.map(p => new Projectile(p.x, p.y, p.vx, p.vy, p.ownerId, p.type));
+                }
                 updateHUD();
             }
         }
@@ -939,6 +1045,13 @@
                 new Decoration(500, 350, 'crystal', 20, '#a855f7')
             ];
             projectiles = [];
+            // Cancel any existing animation loop before starting new one
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            lastTime = performance.now();
+            networkSendTimer = 0;
             gameRunning = true; isPaused = false; animate();
         }
 
@@ -957,9 +1070,16 @@
             ctx.restore();
         }
 
-        function animate() {
+        function animate(currentTime) {
             if(!gameRunning) return;
-            if(isPaused && !isOnline) { requestAnimationFrame(animate); return; }
+            if(isPaused && !isOnline) { animationId = requestAnimationFrame(animate); return; }
+
+            // Calculate delta time for consistent physics regardless of frame rate
+            if (!currentTime) currentTime = performance.now();
+            const rawDelta = currentTime - lastTime;
+            const deltaTime = Math.min(rawDelta / 16.67, 3); // Normalize to ~60fps, cap at 3x to prevent huge jumps
+            lastTime = currentTime;
+            networkSendTimer += rawDelta;
 
             ctx.clearRect(0,0, canvas.width, canvas.height);
             drawBackground(ctx);
@@ -1005,14 +1125,23 @@
                         }
                     }
                     if (isOnline) {
-                        const pState = players.map(p => { if(!p) return null; return { x:Math.round(p.x), y:Math.round(p.y), vx:p.vx, vy:p.vy, kills:p.kills, dir:p.facingRight, att: p.isAttacking && p.attackTimer > 15 }; });
-                        // Send projectiles simply as list
-                        const projState = projectiles.map(p => ({x:p.x, y:p.y, vx:p.vx, vy:p.vy, ownerId:p.ownerId, type:p.type}));
-                        Object.values(connections).forEach(c => c.conn.send({ type: 'gameState', players: pState, projectiles: projState }));
+                        // Only send network updates at fixed interval to prevent overwhelming clients
+                        if (networkSendTimer >= NETWORK_SEND_INTERVAL) {
+                            networkSendTimer = 0;
+                            const pState = players.map(p => { if(!p) return null; return { x:Math.round(p.x), y:Math.round(p.y), vx:p.vx, vy:p.vy, kills:p.kills, dir:p.facingRight, att: p.isAttacking && p.attackTimer > 15 }; });
+                            const projState = projectiles.map(p => ({x:p.x, y:p.y, vx:p.vx, vy:p.vy, ownerId:p.ownerId, type:p.type}));
+                            Object.values(connections).forEach(c => c.conn.send({ type: 'gameState', players: pState, projectiles: projState }));
+                        }
                         updateHUD();
                     } else { updateHUD(); }
                 } else {
-                    if(isOnline && hostConn) hostConn.send({ type: 'input', input: localKeys });
+                    // Client: send input at fixed interval and interpolate positions
+                    if(isOnline && hostConn) {
+                        if (networkSendTimer >= NETWORK_SEND_INTERVAL) {
+                            networkSendTimer = 0;
+                            hostConn.send({ type: 'input', input: localKeys });
+                        }
+                    }
                     players.forEach(p => { if(p) p.interpolate(); });
                 }
             }
