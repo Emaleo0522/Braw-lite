@@ -1185,15 +1185,25 @@
             const k = e.key.toLowerCase();
             if(isDown && k === 'escape') { togglePause(); return; }
 
-            if (['w','arrowup'].includes(k)) {
-                localKeys.up = isDown;
-            }
-            if (['s','arrowdown'].includes(k)) localKeys.down = isDown;
-            if (['a','arrowleft'].includes(k)) localKeys.left = isDown;
-            if (['d','arrowright'].includes(k)) localKeys.right = isDown;
+            // P1 controls (WASD + Space + F) - always go to localKeys
+            if (k === 'w') localKeys.up = isDown;
+            if (k === 's') localKeys.down = isDown;
+            if (k === 'a') localKeys.left = isDown;
+            if (k === 'd') localKeys.right = isDown;
             if ([' ', 'spacebar'].includes(k)) localKeys.attack = isDown;
-            if (['f'].includes(k)) localKeys.skill = isDown;
+            if (k === 'f') localKeys.skill = isDown;
 
+            // In online mode, clients also use arrow keys as alternative
+            if (isOnline && !isHost) {
+                if (k === 'arrowup') localKeys.up = isDown;
+                if (k === 'arrowdown') localKeys.down = isDown;
+                if (k === 'arrowleft') localKeys.left = isDown;
+                if (k === 'arrowright') localKeys.right = isDown;
+                if (k === 'enter') localKeys.attack = isDown;
+                if (k === 'n') localKeys.skill = isDown;
+            }
+
+            // P2 controls (Arrows + Enter/M + N) - only in local mode
             if (!isOnline && isHost) {
                 if (!inputs[1]) inputs[1] = { up:false, down:false, left:false, right:false, attack:false, skill:false };
                 if (k === 'arrowup') inputs[1].up = isDown;
@@ -1201,7 +1211,7 @@
                 if (k === 'arrowleft') inputs[1].left = isDown;
                 if (k === 'arrowright') inputs[1].right = isDown;
                 if (['enter', 'm'].includes(k)) inputs[1].attack = isDown;
-                if (['n'].includes(k)) inputs[1].skill = isDown;
+                if (k === 'n') inputs[1].skill = isDown;
             }
         }
     </script>
