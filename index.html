@@ -263,20 +263,26 @@
         const ICE_SERVERS = {
             config: {
                 iceServers: [
-                    // Google STUN servers (free, reliable)
+                    // Google STUN servers
                     { urls: 'stun:stun.l.google.com:19302' },
                     { urls: 'stun:stun1.l.google.com:19302' },
                     { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' },
-                    // OpenRelay TURN servers (free, open source)
+                    // Additional STUN servers
+                    { urls: 'stun:stun.stunprotocol.org:3478' },
+                    { urls: 'stun:stun.voip.eutelia.it:3478' },
+                    // Free TURN servers from different providers
                     {
-                        urls: 'turn:openrelay.metered.ca:80',
-                        username: 'openrelayproject',
-                        credential: 'openrelayproject'
+                        urls: 'turn:numb.viagenie.ca:3478',
+                        username: 'webrtc@live.com',
+                        credential: 'muazkh'
                     },
                     {
-                        urls: 'turn:openrelay.metered.ca:443',
+                        urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+                        username: 'webrtc',
+                        credential: 'webrtc'
+                    },
+                    {
+                        urls: 'turn:openrelay.metered.ca:80',
                         username: 'openrelayproject',
                         credential: 'openrelayproject'
                     },
@@ -285,9 +291,10 @@
                         username: 'openrelayproject',
                         credential: 'openrelayproject'
                     }
-                ]
+                ],
+                iceCandidatePoolSize: 10
             },
-            debug: 2 // Show connection debug info in console
+            debug: 3 // Maximum debug level
         };
         
         let lobbyState = {
@@ -905,11 +912,19 @@
             document.getElementById('lobby-msg').innerText = 'Conectando al servidor...';
             peer = new Peer(ICE_SERVERS);
             peer.on('open', id => {
+                console.log('✓ Host registered with ID:', id);
                 document.getElementById('lobby-id').value = id;
                 document.getElementById('lobby-msg').innerText = 'Sala creada. Comparte el ID con tus amigos.';
                 isHost = true; myId = 0; updateLobbyUI();
                 document.getElementById('sel-0').disabled = false; document.getElementById('btn-start').classList.remove('hidden');
-                peer.on('connection', conn => handleConnection(conn));
+                peer.on('connection', conn => {
+                    console.log('✓ Incoming connection from:', conn.peer);
+                    handleConnection(conn);
+                });
+            });
+            peer.on('disconnected', () => {
+                console.warn('⚠ Disconnected from signaling server, attempting reconnect...');
+                peer.reconnect();
             });
             peer.on('error', err => {
                 console.error('PeerJS Error:', err);
@@ -929,19 +944,56 @@
 
             peer = new Peer(ICE_SERVERS);
             peer.on('open', id => {
+                console.log('✓ Client registered with ID:', id);
+                console.log('→ Attempting to connect to host:', hostId);
+
                 hostConn = peer.connect(hostId, { reliable: true });
 
                 // Timeout for connection attempt (30 seconds for TURN relay connections)
                 const connectionTimeout = setTimeout(() => {
                     if (!hostConn.open) {
+                        console.error('✗ Connection timeout after 30 seconds');
                         document.getElementById('btn-join').innerText = 'UNIRSE';
                         document.getElementById('btn-join').disabled = false;
-                        alert('No se pudo conectar después de 30 segundos.\n\nPosibles causas:\n- ID de sala incorrecto\n- El host cerró la sala\n- Firewall bloqueando conexión\n\nIntenta de nuevo o pide al host que reinicie la sala.');
+                        alert('No se pudo conectar después de 30 segundos.\n\nPosibles causas:\n- ID de sala incorrecto\n- El host cerró la sala\n- Firewall bloqueando conexión\n\nRevisa la consola (F12) para más detalles.');
                     }
                 }, 30000);
 
                 // Show connection progress
                 document.getElementById('btn-join').innerText = 'BUSCANDO HOST...';
+
+                // Monitor ICE connection state (wait for peerConnection to be ready)
+                const setupIceMonitoring = () => {
+                    if (hostConn.peerConnection) {
+                        console.log('✓ PeerConnection created');
+                        hostConn.peerConnection.onicecandidate = (e) => {
+                            if (e.candidate) {
+                                console.log('ICE candidate:', e.candidate.type, e.candidate.protocol, e.candidate.address || '');
+                            } else {
+                                console.log('ICE gathering complete');
+                            }
+                        };
+                        hostConn.peerConnection.oniceconnectionstatechange = () => {
+                            const state = hostConn.peerConnection.iceConnectionState;
+                            console.log('ICE state:', state);
+                            document.getElementById('btn-join').innerText = state.toUpperCase() + '...';
+
+                            if (state === 'failed') {
+                                console.error('✗ ICE connection failed - no route to host');
+                                clearTimeout(connectionTimeout);
+                                document.getElementById('btn-join').innerText = 'UNIRSE';
+                                document.getElementById('btn-join').disabled = false;
+                                alert('No se pudo establecer conexión P2P.\n\nLos servidores TURN pueden estar bloqueados por tu ISP.\n\nSolución: Intenten ambos usando datos móviles o una VPN.');
+                            }
+                        };
+                        hostConn.peerConnection.onicegatheringstatechange = () => {
+                            console.log('ICE gathering state:', hostConn.peerConnection.iceGatheringState);
+                        };
+                    } else {
+                        setTimeout(setupIceMonitoring, 100);
+                    }
+                };
+                setupIceMonitoring();
 
                 hostConn.on('open', () => {
                     clearTimeout(connectionTimeout);
@@ -959,20 +1011,6 @@
                     alert('Error de conexión: ' + err.type);
                 });
 
-                // Monitor ICE connection state
-                hostConn.on('iceStateChanged', state => {
-                    console.log('ICE state:', state);
-                    if (state === 'checking') {
-                        document.getElementById('btn-join').innerText = 'CONECTANDO...';
-                    } else if (state === 'connected' || state === 'completed') {
-                        document.getElementById('btn-join').innerText = 'ESTABLECIENDO...';
-                    } else if (state === 'failed') {
-                        clearTimeout(connectionTimeout);
-                        document.getElementById('btn-join').innerText = 'UNIRSE';
-                        document.getElementById('btn-join').disabled = false;
-                        alert('Conexión fallida. Tu red puede estar bloqueando WebRTC.');
-                    }
-                });
                 hostConn.on('close', () => {
                     if (gameRunning) {
                         alert('Conexión perdida con el host');
